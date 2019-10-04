@@ -1,0 +1,204 @@
+#.... set of libraries and packages used....
+import pandas as pd
+parser = lambda x: pd.datetime.strptime(x, '%m/%d/%Y')
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+from time import time
+from sklearn import metrics
+from sklearn.feature_extraction import text
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.pipeline import FeatureUnion, Pipeline
+my_stop_words=text.ENGLISH_STOP_WORDS.union()#....English stop words but we did not used it....
+#.... reading the IDs of the annottated text....
+f=open('Results/AllChunks/AllChunkInOne.txt')    
+x=f.readlines()
+b=[]
+#Cleaning the and normalizing the data
+for i in x:
+    i=i.replace(","," ")
+    j=i.replace("\t"," ")
+    k=j.replace("\n"," ") 
+    b.append(k.split())
+#..... the mapp dict contains the clustered id(key) with thier values......
+mapp=dict()
+for l in range(len(b)):
+    for k in (b[l]):        
+        mapp[k]=l
+print(k)#... print the ID...
+print(len(b))# print the length of clusters
+
+Allfiles=pd.read_csv('Results/AllChunks/AllChunk.csv') #... the file contains the information of the clustered ID....
+eventsText=[]
+eventsDescr=[]
+eventsTime=[]
+missedIDs=[]# the id which are missed in from the clusters or missed from the 'AllChunk' which contains the cluster information extracted from the 5 sub chunks ...... 
+#...the attribute names which are going to be extracted.....
+col=['id','eventStartDate','eventCategory','eventDescription','textSnippet',"startPosition"]
+unionAll=pd.DataFrame(columns=col)#.....which will contain the cluster ID attributes with thier values in the same order of the ID in the clusters.......  
+for n in sorted(mapp):
+    found=False
+    for m in range(len(Allfiles)):
+        if n==Allfiles.loc[:,'id'].values[m]:   
+            ID=Allfiles.loc[m,'id']
+            description=Allfiles.loc[m,'eventDescription']
+            Time=Allfiles.loc[m,'eventStartDate']
+            category=Allfiles.loc[m,'eventCategory']
+            Text=Allfiles.loc[m,'textSnippet']
+            pos=Allfiles.loc[m,'startPosition']
+            eventsText.append(Text)
+            eventsDescr.append(description)
+            eventsTime.append(Time)
+            temp={'id':ID,'eventStartDate':Time,'eventCategory':category,'eventDescription':description,'textSnippet':Text,'startPosition':pos}
+            unionAll=unionAll.append(temp, ignore_index=True, verify_integrity=False)            
+            found=True 
+    if found==False: #.....if the id in the Allfile, but if it is not available in the clusters or vis versa....then store to the array 'missedIDs'....  
+        missedIDs.append(n)
+unionAll.to_csv('Results/Annotated GS dataset  with Singleton/unionAll.csv', index=False)
+#....category encoder.....
+from sklearn.preprocessing import OneHotEncoder
+#... load the dataset for clustering..... the 'DataAllMultCategory' contain the new columns for the category which rerepresented....
+DataAllFeatures=pd.read_csv('Results/Annotated GS dataset  with Singleton/EventsDataFinalForClusterWithSingleton.csv')
+Data=DataAllFeatures.fillna('No category')
+Data=Data.drop(['id'], axis=1)
+#....Removing the missed IDs from the sets of clustered event IDs(IDs available in sets of clusters but not found in the csv file extracted from the chunks using the IDs of clustered events)
+for key in (sorted(mapp)):
+    for mis in range(len(missedIDs)):
+        if key==missedIDs[mis]:
+            del mapp[key]
+print((mapp[key]))
+# .... generating the true labels after removing the missed IDs from the input in CSV file....
+colLabel=["Labels"]
+TrueLabel=pd.DataFrame(columns=colLabel)
+true_label=[]
+ids=[]
+for y in (sorted(mapp)):
+    ids.append(y)
+    true_label.append(mapp[y])
+TrueLabel=pd.DataFrame(true_label)
+TrueLabel.to_csv('Results/Annotated GS dataset  with Singleton/TrueLabelWithSingleton.csv', index=False)
+print(len(true_label))
+#... the TF-IDF parameters......
+smooth_idf=True 
+use_idf=True
+#.... the Pipeline function and the Feature Union which encapusate the encoders........
+X_category= Pipeline( [ ('Category',FunctionTransformer(lambda x: x[['eventCategory1','eventCategory2','eventCategory3']], validate=False)),
+                                         ("sclaer",OneHotEncoder()) ])
+
+X_EventDesc= FeatureUnion([
+                    ('eventDesc_tfidf', Pipeline( [ ('extract_field0',FunctionTransformer(lambda x: x['eventDescription'], validate=False)),
+                                                  ('tfidf',TfidfVectorizer(smooth_idf=smooth_idf, use_idf=use_idf,lowercase=True,ngram_range=(1, 1),token_pattern=r'\b\w+\b' )   )]))
+                    ])
+X_textDesc= FeatureUnion([
+                    ('text_tfidff',Pipeline([('extract_field1',FunctionTransformer(lambda x: x['textSnippet'], validate=False)),
+                                                ('tfidf',TfidfVectorizer(smooth_idf=smooth_idf, use_idf=use_idf,lowercase=True,ngram_range=(1, 1),token_pattern=r'\b\w+\b'))])),
+                    
+                    ('eventDesc_tfidff',Pipeline([('extract_field2',FunctionTransformer(lambda x: x['eventDescription'], validate=False)),
+                                                ('tfidf',TfidfVectorizer(smooth_idf=smooth_idf, use_idf=use_idf,lowercase=True,ngram_range=(1, 1),token_pattern=r'\b\w+\b'))]))
+        ])
+X_Union1=FeatureUnion([('eventDesc',X_EventDesc)])# case one: using only event description feature
+X_Union2=FeatureUnion([('Text_eventDesc',X_textDesc)])# case two with two main features:  using event description feature plus text snippet
+X_Union3=FeatureUnion([('Text_eventDesc',X_textDesc),('Category',X_category)])# case three with three main features: using event description feature plus text snippet plus Category
+   
+X_FU=X_Union1.fit_transform(Data).toarray()#....X_Union1 for case one, X_Union2 for case 2, X_Union3 for case 3
+print(X_FU.shape)#.... printing the shape of  the vectors
+    #.... Kmeans paramters..... 
+t0=time()
+stop_words=my_stop_words
+K_clusters=[10,90, 180,296,300]
+random_states=[0,42,65]    # random_state helps ensure that the algorithm returns the same results each time.
+no_iter=[50,100,200,250,300]
+#.....KMeans clustering.....
+for m in range(len(no_iter)):
+    for j in range(len(random_states)):
+        for i in range(len(K_clusters)):
+            kmeans=KMeans(n_clusters=K_clusters[i], random_state=random_states[j],init='k-means++', max_iter=no_iter[m]).fit(X_FU)
+            Kmeans_labels=kmeans.labels_
+            centers=kmeans.cluster_centers_           
+            rand_score=metrics.adjusted_rand_score(true_label,Kmeans_labels)
+            adjusted_mutual_info=metrics.adjusted_mutual_info_score(true_label,Kmeans_labels)
+            normal_mutaul_info=metrics.normalized_mutual_info_score(true_label,Kmeans_labels)
+            homo_score=metrics.homogeneity_score(true_label,Kmeans_labels)
+            completeness_score=metrics.completeness_score(true_label,Kmeans_labels)
+            V_measure=metrics.v_measure_score(true_label,Kmeans_labels)
+            homo_completeness_Vmeasure_score=metrics.homogeneity_completeness_v_measure(true_label,Kmeans_labels)               
+            kmeans_Features=open('Results\AllChunks\clusterEvaluResultNoSingloten\KMenasCluster\kmeans_eventDescr.txt','a+')
+            print("\n\n the parameters of TfidfVectorizer: smooth_idf :", smooth_idf,", use_idf :",use_idf,file=kmeans_Features)
+            print("The Kmean parameters:\n","Number of K_clusters :", K_clusters[i], "\nNumber of iterations: ",no_iter[m],"\nRandom_state values : ",random_states[j],file=kmeans_Features)
+            #print("\n<<<<<<<<<<<<<<<<........................................KMeans results looks like as follow after applying the English stop words......>>>>>>>>>\n",file=kmeans_TextDesc)
+            print("Model Kmeans:  Labels  : ",Kmeans_labels, file=kmeans_Features)           
+            print("Model Kmeans:  Rand index :", rand_score, file=kmeans_Features)
+            print("Model Kmeans:  Adjusted mutual information :", adjusted_mutual_info, file=kmeans_Features)          
+            print("Model Kmeans:  Normalized mutual information :", normal_mutaul_info, file=kmeans_Features)
+            print("Model Kmeans:  Homogeneity Score :", homo_score, file=kmeans_Features)
+            print("Model Kmeans:  Completeness Score :", completeness_score, file=kmeans_Features)
+            print("Model Kmeans:  V_measure :", V_measure, file=kmeans_Features)
+            #....Homogeneity, completeness and V-measure can be computed at once using homogeneity_completeness_v_measure 
+            print("Model Kmeans: score using the three metrics homo_completeness_Vmeasur :", homo_completeness_Vmeasure_score, file=kmeans_Features)           
+            print("Model Kmeans: The shape an number of features :\n\n",X_FU.shape, file=kmeans_Features)
+t=time()-t0  
+print("Model Kmeans: The total time taken to peform the model :\n\n",t, file=kmeans_Features)
+#.... Agglommerative clustering...                     
+from sklearn.cluster import AgglomerativeClustering
+t_agglo0=time()
+affinityAgglo=['euclidean', 'l2', 'manhattan', 'cosine']
+linkage=['ward', 'complete', 'average', 'single']
+for j_a in range(len(affinityAgglo)):
+    for i_a in range(len(K_clusters)):
+        model_agglo=AgglomerativeClustering(n_clusters=K_clusters[i_a], affinity=affinityAgglo[j_a], linkage=linkage[j_a])
+        model_agglo.fit(X_FU)
+        labels_agglo=model_agglo.labels_
+        children_agglo=model_agglo.children_
+        Alggo_file=open('Results\AllChunks\clusterEvaluResultNoSingloten\AgglomerativeCluster\Alggo_eventDesc.txt','a+')
+        print("\n<<<<<<<<<<<<<<<<........................................>>>>>>>>>>>>>>>>>\n <<<<<<<<<<........Agglomerative results looks like as follow after applying the English stop words......>>>>>>>>>\n",file=Alggo_file)
+        homo_score_agglo=metrics.homogeneity_score(true_label,labels_agglo)
+        completeness_score_agglo=metrics.completeness_score(true_label,labels_agglo)
+        V_measure_agglo=metrics.v_measure_score(true_label,labels_agglo)
+        rand_score_agglo=metrics.adjusted_rand_score(true_label,labels_agglo)
+        adjusted_mutual_info_agglo=metrics.adjusted_mutual_info_score(true_label,labels_agglo)
+        normal_mutual_info_agglo=metrics.normalized_mutual_info_score(true_label,labels_agglo)
+        homo_completeness_Vmeasure_agglo=metrics.homogeneity_completeness_v_measure(true_label,labels_agglo)
+        print("Model Agglomerative parameters: \nThe number of clusters used :",K_clusters[i_a],"\nThe affinnity type :",affinityAgglo[j_a],"\nThe linkage kind :",linkage[j_a], file=Alggo_file)
+        print("Labels >>> : ",labels_agglo,"\n children >>> :",children_agglo , file=Alggo_file) 
+        print("Model Kmeans:  Rand index :", rand_score_agglo, file=Alggo_file)
+        print("Model Agglomerative:  Adjusted mutual information :", adjusted_mutual_info_agglo, file=Alggo_file)          
+        print("Model Agglomerative:  Normalized mutual information :", normal_mutual_info_agglo, file=Alggo_file)          
+        print("Model Agglomerative:  Homogeneity Score :", homo_score_agglo, file=Alggo_file)
+        print("Model Agglomerative:  Completeness Score :", completeness_score_agglo, file=Alggo_file)
+        print("Model Agglomerative:  V_measure :", V_measure_agglo, file=Alggo_file)
+        print("Model Agglomerative:  the three metrics homo_completeness_Vmeasur :", homo_completeness_Vmeasure_agglo, file=Alggo_file)
+        
+t_agglo2=time()
+t_agglo=t_agglo2-t_agglo0 
+print("\nModel Agglomerative: The total time taken to peform the model : ",t_agglo, file=Alggo_file)
+
+# Affinity propagation clustering and parameters....
+from sklearn.cluster import AffinityPropagation        
+t_aff0=time()     
+affiPro_max_iter=[10,50,100,200,250]   
+convergence_iter=[5,10,15,20]
+for c in range(len(convergence_iter)):     
+    for j_iter in range(len(affiPro_max_iter)):
+        affPropag=AffinityPropagation(max_iter=affiPro_max_iter[j_iter], convergence_iter=convergence_iter[c]).fit(X_FU)
+        labels_affPropag=affPropag.labels_
+        print(labels_affPropag)
+        affPropag_file=open('Results\AllChunks\clusterEvaluResultNoSingloten\AffinityPropagation\Affinity_eventDescr+Text.txt','a+')
+        rand_score_affintyPro=metrics.adjusted_rand_score(true_label,labels_affPropag)
+        adjusted_mutual_info_affintyPro=metrics.adjusted_mutual_info_score(true_label,labels_affPropag)
+        normal_mutaul_info_affintyPro=metrics.normalized_mutual_info_score(true_label,labels_affPropag)
+        homo_score_affintyPro=metrics.homogeneity_score(true_label,labels_affPropag)
+        completeness_score_affintyPro=metrics.completeness_score(true_label,labels_affPropag)
+        V_measure_affintyPro=metrics.v_measure_score(true_label,labels_affPropag)
+        homo_completeness_Vmeasure_affintyPro=metrics.homogeneity_completeness_v_measure(true_label,labels_affPropag)
+        print("\n................\nLabels : ",labels_affPropag, file=affPropag_file) 
+        print("Model AffinityPropagation parameters: \nNumber of convergence iterations :",convergence_iter[c]," \nMax number of iterations:",affiPro_max_iter[j_iter], file=affPropag_file)        
+        print("Model AffinityPropagation: Rand index Score :", rand_score_affintyPro, file=affPropag_file)
+        print("Model AffinityPropagation: Adjusted Mutual Information Score :", adjusted_mutual_info_affintyPro, file=affPropag_file)
+        print("Model AffinityPropagation: Normalized Mutual information :", normal_mutaul_info_affintyPro, file=affPropag_file)          
+        print("Model AffinityPropagation: Homogeneity Score :", homo_score_affintyPro, file=affPropag_file)
+        print("Model AffinityPropagation: Completeness Score :", completeness_score_affintyPro, file=affPropag_file)
+        print("Model AffinityPropagation: V_measure :", V_measure_affintyPro, file=affPropag_file)
+        print("Model AffinityPropagation: the three metrics homo_completeness_Vmeasur :", homo_completeness_Vmeasure_affintyPro, file=affPropag_file)
+
+t_aff2=time()
+t_aff=t_aff2-t_aff0 
+print("\nModel AffinityPropagation: The total time taken to peform the model :",t_aff, file=affPropag_file)
